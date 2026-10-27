@@ -1,52 +1,51 @@
 # Delivery Exception Agent
 
-An n8n-based logistics workflow that analyzes delivery exceptions, checks shipment and SLA facts, recommends a next action, applies safety guardrails, and records the outcome.
+An n8n workflow that triages logistics delivery exceptions using rule-based shipment/SLA checks, Google Gemini classification, safety guardrails, and Google Sheets logging.
 
 ## Overview
 
-Delivery teams receive reports such as weather delays, address problems, damaged packages, and missed delivery attempts. This workflow helps triage those reports consistently while keeping sensitive or uncertain decisions with a human reviewer.
+Delivery teams receive reports such as weather delays, address problems, damaged packages, and missed delivery attempts. This project helps structure those reports into consistent next actions while routing sensitive or uncertain cases for human review.
 
-**Core principle:** deterministic rules calculate shipment/SLA facts; Gemini classifies the free-text report; guardrails can override the AI; customer-facing messages remain drafts for human approval.
+**Core principle:** deterministic rules calculate shipment and SLA facts; AI classifies free text and drafts a response; guardrails can override AI suggestions. Customer-facing messages are prepared as drafts and are not sent automatically.
 
 ## Features
 
-- Accepts delivery exception reports through a webhook.
-- Looks up sample shipment/customer data and calculates SLA risk.
-- Detects missing information and repeat reports within a 24-hour window.
-- Uses Google Gemini to classify the exception and suggest one action.
+- Accepts exception reports through an n8n webhook.
+- Looks up synthetic shipment/customer records and calculates SLA risk.
+- Routes missing-data and duplicate reports without calling Gemini.
+- Uses Google Gemini to classify exception reports and recommend one action.
 - Applies confidence, exception-type, and SLA guardrails.
-- Routes cases to customer notification, address clarification, SLA escalation, human review, or duplicate skip.
-- Keeps a bounded workflow log and appends decision records to Google Sheets.
-- Returns the processed record through the webhook response.
+- Prepares customer-notification or address-clarification drafts, SLA escalation records, human-review items, or duplicate-skip records.
+- Appends decision records to a configurable Google Sheet.
+- Returns the decision through the webhook response.
 
 ## Workflow
 
-1. **Receive:** Webhook - Delivery Exception accepts a POST request.
-2. **Enrich:** Lookup Data & Compute Facts finds the sample shipment/customer, calculates SLA status, and prepares the prompt.
-3. **Validate:** missing data and duplicate reports bypass the AI and are handled safely.
-4. **Classify:** Gemini - Classify & Decide returns structured JSON.
-5. **Guard:** Apply Guardrails validates the action and confidence, then applies SLA rules.
-6. **Route:** the workflow prepares a customer message, address clarification, internal SLA escalation, human review item, or duplicate-skip record.
-7. **Log/respond:** the record is stored in workflow static data, sent to Google Sheets, and returned to the caller.
+1. **Webhook - Delivery Exception:** accepts a POST request with shipment_id and exception_text.
+2. **Lookup Data & Compute Facts:** checks sample records and calculates SLA fields.
+3. **Missing Data or Duplicate?:** bypasses the AI for missing information or a repeat report seen in the last 24 hours.
+4. **Gemini - Classify & Decide:** returns a structured classification and suggested action.
+5. **Apply Guardrails:** enforces allowed actions, confidence thresholds, exception rules, and SLA overrides.
+6. **Respond to Webhook / Google Sheets - Log Record:** returns the result and appends a log row.
 
-## Allowed actions
+## Available actions
 
 | Action | Purpose |
 | --- | --- |
 | notify_customer | Prepare a customer update draft |
 | request_address | Prepare an address clarification draft |
 | escalate_sla | Prepare an internal SLA-risk alert |
-| human_review | Send uncertain or sensitive cases for review |
+| human_review | Route uncertain or sensitive cases for review |
 | duplicate_skip | Ignore a repeat report within the deduplication window |
 
 ## Guardrails
 
-- Unknown actions or confidence below **0.7** go to human review.
+- Unknown actions and confidence below **0.7** are sent to human review.
 - Damaged/lost items, customer complaints, and unknown exception types require human review.
 - A breached SLA escalates unless human review is already required.
 - An at-risk SLA overrides a proposed customer notification with escalation.
-- Missing shipment/customer/address data is not guessed.
-- Customer emails and address requests are drafts; an actual sending step is not included in this workflow.
+- Missing shipment/customer/address information is not guessed.
+- Customer notifications and address requests are drafts; a real approval and email-sending integration must be added separately.
 
 ## Repository structure
 
@@ -54,7 +53,7 @@ Delivery teams receive reports such as weather delays, address problems, damaged
 Delivery-Exception-Agent/
 ├── README.md
 ├── documentation/
-│   └── Delivery_Exception_Agent_Overview.docx
+│   └── OVERVIEW.md
 ├── setup/
 │   └── SETUP.md
 └── workflow/
@@ -63,16 +62,14 @@ Delivery-Exception-Agent/
 
 ## Quick start
 
-1. Open the setup/SETUP.md guide.
+1. Read setup/SETUP.md.
 2. Import workflow/Delivery_Exception_Agent.json into n8n.
-3. Configure your own Google Gemini header-auth credential and Google Sheets OAuth credential in n8n.
-4. Replace the Google Sheet ID placeholder and verify the sheet columns.
-5. Review the sample data and SLA rules before testing.
-6. Test the webhook with a sample request before enabling production traffic.
+3. Configure the Google Gemini HTTP Header Auth credential.
+4. Configure Google Sheets OAuth and replace the spreadsheet ID placeholder.
+5. Review the demo shipment records and SLA thresholds before testing.
+6. Test the webhook with synthetic data before enabling production traffic.
 
-## Example webhook request
-
-Send a POST request to the n8n test or production webhook URL with JSON like:
+## Example request
 
 ~~~json
 {
@@ -81,24 +78,21 @@ Send a POST request to the n8n test or production webhook URL with JSON like:
 }
 ~~~
 
-Use the webhook URL generated by your own n8n instance. Do not commit real customer details, API keys, tokens, credential exports, or private webhook URLs.
+Send this JSON as a POST request to the test or production webhook URL generated by your own n8n instance.
 
-## Google Sheets log fields
+## Google Sheets fields
 
-The workflow maps these fields to the log sheet: timestamp, shipment id, exception type, action, priority, confidence, channel, recipient, message, reason, approval required, record status, and guardrail overrides.
+The log mapping includes timestamp, shipment id, exception type, action, priority, confidence, channel, recipient, message, reason, approval required, record status, and guardrail overrides.
 
-## Important limitations
+## Limitations and production checklist
 
-- Shipment, customer, address, and SLA data in the Code node are demo data and must be replaced with a trusted operational source.
-- Duplicate tracking and recent history use n8n workflow static data; use a database for durable production storage.
-- The webhook does not implement authentication. Secure it before exposing it publicly.
-- Configure an actual notification/approval integration before sending messages to customers.
-- Test AI decisions and error handling with realistic, non-sensitive test cases.
+- Shipment, customer, address, and SLA values are demo data. Replace them with a trusted operational source.
+- Duplicate tracking uses n8n workflow static data. Use a database for durable production storage.
+- The webhook has no authentication by default; secure it before public exposure.
+- Configure a human approval flow and actual notification node before sending customer messages.
+- Confirm the Google Sheet ID, tab, and column mappings after import.
+- Add error alerts and test AI behavior with realistic, non-sensitive cases.
 
 ## Security
 
-The committed workflow is sanitized: credential bindings and account-specific IDs/URLs are removed or replaced with setup placeholders. Configure credentials inside n8n rather than storing secrets in the exported JSON.
-
-## License
-
-Add a license file if you intend to distribute this project under a specific license.
+The workflow JSON is sanitized: credential bindings and account-specific spreadsheet/webhook references are removed or replaced with placeholders. Configure secrets in n8n credentials; never commit API keys, OAuth tokens, real customer information, or private URLs.
