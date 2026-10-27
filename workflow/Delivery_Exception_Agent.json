@@ -125,6 +125,48 @@
         520
       ],
       "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.data_missing }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "id": "delivery-missing-condition"
+            },
+            {
+              "leftValue": "={{ $json.duplicate }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "id": "delivery-duplicate-condition"
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "delivery-exception-short-circuit",
+      "name": "Missing Data or Duplicate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        400,
+        300
+      ]
     }
   ],
   "pinData": {},
@@ -144,7 +186,7 @@
       "main": [
         [
           {
-            "node": "Gemini - Classify & Decide",
+            "node": "Missing Data or Duplicate?",
             "type": "main",
             "index": 0
           }
@@ -172,6 +214,24 @@
           },
           {
             "node": "Google Sheets - Log Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Missing Data or Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "Apply Guardrails",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gemini - Classify & Decide",
             "type": "main",
             "index": 0
           }
