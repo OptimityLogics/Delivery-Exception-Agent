@@ -1,0 +1,138 @@
+{
+  "name": "Delivery Exception Agent (Sanitized)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "delivery-exception",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "delivery-exception-webhook",
+      "name": "Webhook - Delivery Exception",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst body = input.body || input;\nconst shipment_id = String(body.shipment_id || \"\").trim();\nconst exception_text = String(body.exception_text || \"\").trim();\nconst shipments = {\n\"SHP-1001\":{customer_name:\"Sample Customer One\",customer_email:\"customer1@example.com\",customer_tier:\"premium\",status:\"In Transit\",address:\"Sample delivery address, Mumbai\",route:\"Ahmedabad -> Mumbai\",sla_hours_left:48},\n\"SHP-1002\":{customer_name:\"Sample Customer Two\",customer_email:\"customer2@example.com\",customer_tier:\"standard\",status:\"Out for Delivery\",address:\"Sample delivery address, Pune\",route:\"Surat -> Pune\",sla_hours_left:6},\n\"SHP-1003\":{customer_name:\"Sample Customer Three\",customer_email:\"customer3@example.com\",customer_tier:\"standard\",status:\"Delivery Attempted\",address:\"Sample delivery address, Delhi\",route:\"Vadodara -> Delhi\",sla_hours_left:20},\n\"SHP-1004\":{customer_name:\"Sample Customer One\",customer_email:\"customer1@example.com\",customer_tier:\"premium\",status:\"Delayed\",address:\"Sample delivery address, Bengaluru\",route:\"Ahmedabad -> Bengaluru\",sla_hours_left:-5},\n\"SHP-1005\":{customer_name:\"Sample Customer Four\",customer_email:\"customer4@example.com\",customer_tier:\"premium\",status:\"Exception\",address:\"Sample delivery address, Chennai\",route:\"Rajkot -> Chennai\",sla_hours_left:30},\n\"SHP-1006\":{customer_name:\"Sample Customer Two\",customer_email:\"customer2@example.com\",customer_tier:\"standard\",status:\"Held\",address:\"\",route:\"Surat -> Jaipur\",sla_hours_left:10}\n};\nconst missing=[];\nif(!shipment_id) missing.push(\"shipment_id\");\nif(shipment_id && !shipments[shipment_id]) missing.push(\"shipment record\");\nif(!exception_text) missing.push(\"exception_text\");\nconst shipment=shipments[shipment_id]||null;\nif(shipment&&!shipment.address) missing.push(\"delivery address\");\nconst facts=shipment?{shipment_id,...shipment,sla_breached:shipment.sla_hours_left<0,sla_warn_hours:shipment.customer_tier===\"premium\"?24:12,sla_at_risk:shipment.sla_hours_left>=0&&shipment.sla_hours_left<=(shipment.customer_tier===\"premium\"?24:12),escalate_to:shipment.customer_tier===\"premium\"?\"ops-manager\":\"ops-team\"}:{};\nconst prompt=[\n\"You are a logistics delivery-exception analyst. Classify the exception and choose ONE next action.\",\n\"SHIPMENT FACTS (rule-computed; trust these): \"+JSON.stringify(facts),\n\"EXCEPTION REPORT: \"+JSON.stringify(exception_text),\n\"Allowed exception_type: weather_delay, traffic_delay, address_issue, recipient_unavailable, damaged_or_lost, customer_complaint, unknown\",\n\"Allowed action: notify_customer, request_address, escalate_sla, human_review\",\n\"Rules: address_issue -> request_address; weather_delay, traffic_delay, recipient_unavailable with safe SLA -> notify_customer; SLA at risk/breached -> escalate_sla; damaged_or_lost, complaints, unclear/conflicting data -> human_review. Never invent facts.\",\n'Return JSON only: {\"exception_type\":\"\",\"action\":\"\",\"confidence\":0,\"reason\":\"\",\"new_eta_hint\":\"\",\"draft_message\":\"\"}'\n].join(\"\\n\");\nreturn [{json:{shipment_id,exception_text,facts,missing,data_missing:missing.length>0,prompt}}];"
+      },
+      "id": "delivery-exception-prepare",
+      "name": "Lookup Data & Compute Facts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: $json.prompt }] }], generationConfig: { temperature: 0.1, responseMimeType: \"application/json\" } }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "delivery-exception-gemini",
+      "name": "Gemini - Classify & Decide",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        500,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "const previous=$(\"Lookup Data & Compute Facts\").first().json;\nconst response=$input.first().json;\nif(previous.data_missing)return [{json:{timestamp:new Date().toISOString(),shipment_id:previous.shipment_id,exception_type:\"unknown\",action:\"human_review\",priority:\"high\",confidence:0,reason:\"Missing data: \"+previous.missing.join(\", \")+\". The agent will not guess.\",channel:\"human-queue\",recipient:\"support-lead\",message:\"\",approval_required:true,record_status:\"awaiting_human\",guardrail_overrides:[\"missing data\"]}}];\nlet d={};\ntry{const t=String(response.candidates[0].content.parts[0].text||\"\");d=JSON.parse(t.slice(t.indexOf(\"{\"),t.lastIndexOf(\"}\")+1));}\ncatch(e){d={exception_type:\"unknown\",action:\"human_review\",confidence:0,reason:\"AI output could not be parsed\",draft_message:\"\"};}\nconst allowed=[\"notify_customer\",\"request_address\",\"escalate_sla\",\"human_review\"];\nlet action=allowed.includes(d.action)?d.action:\"human_review\";\nconst overrides=[];\nconst confidence=Number(d.confidence)||0;\nconst f=previous.facts;\nif(confidence<0.7){action=\"human_review\";overrides.push(\"confidence below 0.7\");}\nif([\"damaged_or_lost\",\"customer_complaint\",\"unknown\"].includes(d.exception_type)){action=\"human_review\";overrides.push(\"exception type requires human review\");}\nif(f.sla_breached&&action!==\"human_review\"){action=\"escalate_sla\";overrides.push(\"SLA already breached\");}\nelse if(f.sla_at_risk&&action===\"notify_customer\"){action=\"escalate_sla\";overrides.push(\"SLA at risk\");}\nconst priority=f.sla_breached?\"critical\":((f.sla_at_risk||f.customer_tier===\"premium\")?\"high\":\"normal\");\nconst customerAction=[\"notify_customer\",\"request_address\"].includes(action);\nreturn [{json:{timestamp:new Date().toISOString(),shipment_id:previous.shipment_id,exception_type:d.exception_type||\"unknown\",action,priority,confidence,reason:d.reason||\"\",channel:customerAction?\"email-draft\":(action===\"escalate_sla\"?\"internal-alert-draft\":\"human-queue\"),recipient:customerAction?f.customer_email:(action===\"escalate_sla\"?f.escalate_to:\"support-lead\"),message:customerAction?(d.draft_message||\"\"):\"\",approval_required:customerAction||action===\"human_review\",record_status:customerAction?\"pending_approval\":(action===\"human_review\"?\"awaiting_human\":\"actioned\"),guardrail_overrides:overrides}}];"
+      },
+      "id": "delivery-exception-guardrails",
+      "name": "Apply Guardrails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "delivery-exception-response",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1040,
+        300
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook - Delivery Exception": {
+      "main": [
+        [
+          {
+            "node": "Lookup Data & Compute Facts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Data & Compute Facts": {
+      "main": [
+        [
+          {
+            "node": "Gemini - Classify & Decide",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini - Classify & Decide": {
+      "main": [
+        [
+          {
+            "node": "Apply Guardrails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Guardrails": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "tags": []
+}
